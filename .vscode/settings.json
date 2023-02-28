@@ -45,6 +45,7 @@
         "cinttypes": "cpp",
         "typeinfo": "cpp",
         "bit": "cpp",
-        "avutil.h": "c"
+        "avutil.h": "c",
+        "avcodec.h": "c"
     }
 }
