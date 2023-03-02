@@ -17,5 +17,5 @@ include_directories(${SYSROOT})
 
 
 project(recode)
-add_executable(recode main.c)
+add_executable(recode main.cpp)
 target_link_libraries(recode ${FFMPEG_LIBS} dl)
