@@ -16,6 +16,6 @@ include_directories(.)
 include_directories(${SYSROOT})
 
 
-project(recode)
-add_executable(recode main.cpp aacEncode.cpp)
-target_link_libraries(recode ${FFMPEG_LIBS} dl)
+project(recodeAac)
+add_executable(recodeAac main.cpp aacEncode.cpp)
+target_link_libraries(recodeAac ${FFMPEG_LIBS} dl)
