@@ -10,6 +10,8 @@ extern "C" {
 
 };
 
+
+#include "aacEncode.hh"
 using namespace std;
 
 
@@ -106,6 +108,8 @@ int main(int argc, char **argv) {
         pcm2wav(2, 48000, 16, pcmPath.c_str(),outFile.c_str());
     }
 
+    aacEncoder();
+
     return 0;
 }
 
@@ -128,6 +132,7 @@ void showSpec(AVFormatContext *ctx) {
 
 #include <sys/stat.h> 
 
+//双声道但是只有第一声道有数据转双声道
 void pcmLiftToLR(uint8_t* data, size_t size)
 {
     for(auto i = 0; i <= size; i += 4)
