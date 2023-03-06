@@ -52,6 +52,7 @@ static void showSpec(AVFormatContext *ctx);
 static void pcm2wav(uint16_t numChannle, uint32_t sampRate, uint16_t bitPerSample, const char *pcmFile, const char *wavFile);
 
 
+void pcmLiftToLR(uint8_t* data, size_t size);
 
 
 int main(int argc, char **argv) {
@@ -66,6 +67,7 @@ int main(int argc, char **argv) {
     std::string deviceName = "default";
     AVDictionary *options = nullptr;
     // open audio device
+
     int ret = avformat_open_input(&fmt_ctx, deviceName.c_str(), format, &options);
     if (ret < 0) {
         std::cout << "Failed to open audio device!" << std::endl;
@@ -84,6 +86,7 @@ int main(int argc, char **argv) {
     while (!ret && count++ < 5000) {
         ret = av_read_frame(fmt_ctx, &ptk);
         // write file
+        pcmLiftToLR(ptk.data,ptk.size);
         fwrite(ptk.data,ptk.size,1,out);
         // std::cout << "ptk.size:" << ptk.size << std::endl;
         // std::cout << "count:" << count << std::endl;
@@ -124,6 +127,14 @@ void showSpec(AVFormatContext *ctx) {
 }
 
 #include <sys/stat.h> 
+
+void pcmLiftToLR(uint8_t* data, size_t size)
+{
+    for(auto i = 0; i <= size; i += 4)
+    {
+        memccpy(data + i + 2, data + i, 1, 2);
+    }
+}
 
 void pcm2wav(uint16_t numChannle, uint32_t sampRate, uint16_t bitPerSample, const char *pcmFile, const char *wavFile)
 {
