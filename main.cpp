@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <iostream>
 extern "C" {
     #include "libavcodec/avcodec.h"
     #include "libavdevice/avdevice.h"
@@ -6,6 +7,11 @@ extern "C" {
     #include "libavutil/frame.h"
     #include "libavformat/avformat.h"
 }
+#include "aacDecode.hh"
+using namespace std;
+
+#define AAC_FILE "outfile.aac"
+#define OUT_FILE "outfile.pcm"
 
 void pcmLiftToLR(uint8_t *data, size_t size);
 
@@ -93,14 +99,14 @@ int main(int argc, char *argv[])
         frame->nb_samples = cod_ctx->frame_size; // 1024
 
         int pcmbuf_size = cod_ctx->frame_size * 2 * cod_ctx->channels;
-        const uint8_t *pcmbuffer = (const uint8_t*)malloc(pcmbuf_size);
+        const uint8_t *pcmbuffer = (const uint8_t *)malloc(pcmbuf_size);
         avcodec_fill_audio_frame(frame, cod_ctx->channels, cod_ctx->sample_fmt, pcmbuffer, pcmbuf_size, 1);
 
         AVPacket *sound_packet = av_packet_alloc();
         AVPacket *packet = av_packet_alloc();
 
         int i = 0, count = 0;
-        while (1)
+        while (i < 100)
         {
             // sound_packet->size = 64 字节
             if (av_read_frame(fmt_ctx, sound_packet) < 0)
@@ -111,7 +117,7 @@ int main(int argc, char *argv[])
             // 累积到一帧（nb_samples x 4 字节），再送到编码器进行编码
             if (count + sound_packet->size <= pcmbuf_size)
             {
-                memcpy((void*)(pcmbuffer + count), sound_packet->data, sound_packet->size);
+                memcpy((void *)(pcmbuffer + count), sound_packet->data, sound_packet->size);
                 count += sound_packet->size;
                 av_packet_unref(sound_packet);
             }
@@ -130,6 +136,11 @@ int main(int argc, char *argv[])
         }
     } while (0);
 
+    AudioDecodeSpec spec;
+    FFmpegUtils::aacDecode(AAC_FILE, OUT_FILE, spec);
+    cout << "采样率：" << spec.sampleRate << endl;
+    cout << "采样格式：" << av_get_sample_fmt_name(spec.sampleFmt) << endl;
+    cout << "声道数：" << av_get_channel_layout_nb_channels(spec.chLayout) << endl;
 _Error:
 
     if (aacfp)
