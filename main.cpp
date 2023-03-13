@@ -1,183 +1,155 @@
-#include <iostream>
-#include <csignal>
-#include <string>
-#include <ctime>
-
-extern "C"
-{
-#include "libavcodec/avcodec.h"
-#include "libavdevice/avdevice.h"
-#include "libavutil/common.h"
-#include "libavutil/frame.h"
-#include "libavformat/avformat.h"
-};
-
-#include "aacEncode.hh"
-using namespace std;
-
-#define AUDIO_FORMAT_PCM 1
-#define AUDIO_FORMAT_FLOAT 3
-
-typedef struct
-{
-    // RIFF Chunk
-    uint8_t riffChunkID[4] = {'R', 'I', 'F', 'F'};
-    uint32_t riffChunkSize;
-
-    // DATA
-    uint8_t format[4] = {'W', 'A', 'V', 'E'};
-
-    // FMT Chunk
-    uint8_t fmtChunkID[4] = {'f', 'm', 't', ' '};
-    uint32_t fmtChunkSize = 16;
-
-    // 编码格式(音频编码)
-    uint16_t audioFormat = AUDIO_FORMAT_PCM;
-    // 声道数
-    uint16_t numChannel;
-    // 采样率
-    uint32_t sampleRate;
-    // 字节率
-    uint32_t byteRate;
-    // 一个样本的字节数
-    uint16_t blockAlign;
-    // 位深度
-    uint16_t bitsPerSample;
-
-    // DATA Chunk
-    uint8_t dataChunkID[4] = {'d', 'a', 't', 'a'};
-    uint32_t dataChunkSize;
-} WAVHeader;
-
-static void showSpec(AVFormatContext *ctx);
-static void pcm2wav(uint16_t numChannle, uint32_t sampRate, uint16_t bitPerSample, const char *pcmFile, const char *wavFile);
+#include <stdio.h>
+extern "C" {
+    #include "libavcodec/avcodec.h"
+    #include "libavdevice/avdevice.h"
+    #include "libavutil/common.h"
+    #include "libavutil/frame.h"
+    #include "libavformat/avformat.h"
+}
 
 void pcmLiftToLR(uint8_t *data, size_t size);
 
-bool run = true;
-void signalHandler(int signum)
+int encodec_frame_to_packet(AVCodecContext *cod_ctx, AVFrame *frame, AVPacket *packet)
 {
-    run = false;
-}
-
-int main(int argc, char **argv)
-{
-    // register device
-    avdevice_register_all();
-    // set logger level
-    av_log_set_level(AV_LOG_DEBUG);
-    // get input device format
-    AVInputFormat *format = av_find_input_format("alsa");
-    // init context
-    AVFormatContext *fmt_ctx = nullptr;
-    std::string deviceName = "default";
-    AVDictionary *options = nullptr;
-    // open audio device
-
-    int ret = avformat_open_input(&fmt_ctx, deviceName.c_str(), format, &options);
-    if (ret < 0)
+    int send_ret = avcodec_send_frame(cod_ctx, frame);
+    if (send_ret == AVERROR_EOF || send_ret == AVERROR(EAGAIN))
     {
-        std::cout << "Failed to open audio device!" << std::endl;
+        return EAGAIN;
     }
-    showSpec(fmt_ctx);
-    AVPacket ptk;
-    av_init_packet(&ptk);
-    string pcmPath = "audio.pcm";
-    if (argc >= 2)
+    else if (send_ret < 0)
     {
-        pcmPath = argv[1];
+        printf("failed to send frame to encoder\n");
+        return EINVAL;
     }
 
-    FILE *out = fopen(pcmPath.c_str(), "wb");
-    signal(SIGINT, signalHandler);
-    time_t run_time = time(NULL);
-    while (!ret && run)
+    int receive_ret = avcodec_receive_packet(cod_ctx, packet);
+    if (receive_ret == AVERROR_EOF || receive_ret == AVERROR(EAGAIN))
     {
-        ret = av_read_frame(fmt_ctx, &ptk);
-        // write file
-        pcmLiftToLR(ptk.data, ptk.size);
-        fwrite(ptk.data, ptk.size, 1, out);
-        // std::cout << "ptk.size:" << ptk.size << std::endl;
-        // release ptk
-        av_packet_unref(&ptk);
-        cout << "record time is " << time(NULL) - run_time << " seconds \r";
+        return EAGAIN;
     }
-    fflush(out);
-    fclose(out);
-    // close device
-    avformat_close_input(&fmt_ctx);
-
-    std::cout << "succeed recode " << pcmPath << std::endl;
-
-    if (argc == 3)
+    else if (receive_ret < 0)
     {
-        string outFile = argv[2];
-        pcm2wav(2, 48000, 16, pcmPath.c_str(), outFile.c_str());
+        printf("failed to receive frame frome encoder\n");
+        return EINVAL;
     }
-
-    aacEncoder();
-
     return 0;
 }
 
-void showSpec(AVFormatContext *ctx)
+#define SOUND_CARD "default"
+
+int main(int argc, char *argv[])
 {
-    // 获取输入流
-    AVStream *stream = ctx->streams[0];
-    // 获取音频参数
-    AVCodecParameters *params = stream->codecpar;
-    // 声道数
-    std::cout << "params->channels :" << params->channels << std::endl;
-    // 采样率
-    std::cout << "params->sample_rate :" << params->sample_rate << std::endl;
-    // 采样格式
-    std::cout << "params->format :" << params->format << std::endl;
-    std::cout << "params->channel_layout :" << params->channel_layout << std::endl;
-    std::cout << "params->codec_id :" << av_get_bits_per_sample(params->codec_id) << std::endl;
-    // 每一个样本的一个声道占用多少个字节
-    std::cout << av_get_bytes_per_sample((AVSampleFormat)params->format) << std::endl;
+    // 初始化设备
+    avdevice_register_all();
+    AVInputFormat *in_fmt = av_find_input_format("alsa");
+    AVFormatContext *fmt_ctx = avformat_alloc_context();
+    FILE *aacfp = fopen("outfile.aac", "w+");
+    AVFrame *frame = av_frame_alloc();
+    do
+    {
+
+        if (avformat_open_input(&fmt_ctx, SOUND_CARD, in_fmt, NULL) < 0)
+        {
+            printf("failed to open input stream.default.\n");
+            goto _Error;
+        }
+        if (avformat_find_stream_info(fmt_ctx, NULL) < 0)
+        {
+            printf("failed to find stream info\n");
+            goto _Error;
+        }
+
+        // 查找流信息
+        int stream_index = -1;
+        stream_index = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+        if (stream_index < 0)
+        {
+            printf("failed to find stream_index\n");
+            goto _Error;
+        }
+        av_dump_format(fmt_ctx, stream_index, SOUND_CARD, 0);
+
+        // 编码器初始化
+        AVCodec *cod = avcodec_find_encoder_by_name("libfdk_aac");
+        AVCodecContext *cod_ctx = avcodec_alloc_context3(cod);
+        cod_ctx->profile = FF_PROFILE_AAC_HE_V2;
+        cod_ctx->codec_type = AVMEDIA_TYPE_AUDIO;
+        cod_ctx->sample_fmt = AV_SAMPLE_FMT_S16;
+        cod_ctx->sample_rate = 48000;
+        cod_ctx->channels = 2;
+        cod_ctx->channel_layout = av_get_channel_layout("stereo");
+        if (avcodec_open2(cod_ctx, cod, NULL) < 0)
+        {
+            printf("failed to open codec\n");
+            goto _Error;
+        }
+        printf("frame_size:%d\n", cod_ctx->frame_size);
+
+        // 一帧音频采样数据
+        frame->format = AV_SAMPLE_FMT_S16;
+        frame->channels = 2;
+        frame->sample_rate = 48000;
+        frame->channel_layout = av_get_channel_layout("stereo");
+        frame->nb_samples = cod_ctx->frame_size; // 1024
+
+        int pcmbuf_size = cod_ctx->frame_size * 2 * cod_ctx->channels;
+        const uint8_t *pcmbuffer = (const uint8_t*)malloc(pcmbuf_size);
+        avcodec_fill_audio_frame(frame, cod_ctx->channels, cod_ctx->sample_fmt, pcmbuffer, pcmbuf_size, 1);
+
+        AVPacket *sound_packet = av_packet_alloc();
+        AVPacket *packet = av_packet_alloc();
+
+        int i = 0, count = 0;
+        while (1)
+        {
+            // sound_packet->size = 64 字节
+            if (av_read_frame(fmt_ctx, sound_packet) < 0)
+            {
+                printf("capture pcm data failed\n");
+                break;
+            }
+            // 累积到一帧（nb_samples x 4 字节），再送到编码器进行编码
+            if (count + sound_packet->size <= pcmbuf_size)
+            {
+                memcpy((void*)(pcmbuffer + count), sound_packet->data, sound_packet->size);
+                count += sound_packet->size;
+                av_packet_unref(sound_packet);
+            }
+            else
+            {
+                pcmLiftToLR((uint8_t *)pcmbuffer, count);
+                if (encodec_frame_to_packet(cod_ctx, frame, packet) < 0)
+                    break;
+                frame->pts = i;
+                i++;
+                printf("encode %d frame, frame size:%d packet szie:%d\n", i, count, packet->size);
+                fwrite(packet->data, 1, packet->size, aacfp);
+                av_packet_unref(packet);
+                count = 0;
+            }
+        }
+    } while (0);
+
+_Error:
+
+    if (aacfp)
+    {
+        fflush(aacfp);
+        fclose(aacfp);
+    }
+
+    // 释放资源
+    if (frame)
+    {
+        av_frame_free(&frame);
+    }
+    return 0;
 }
 
-#include <sys/stat.h>
-
-// 双声道但是只有第一声道有数据转双声道
 void pcmLiftToLR(uint8_t *data, size_t size)
 {
     for (auto i = 0; i <= size; i += 4)
     {
         memccpy(data + i + 2, data + i, 1, 2);
     }
-}
-
-void pcm2wav(uint16_t numChannle, uint32_t sampRate, uint16_t bitPerSample, const char *pcmFile, const char *wavFile)
-{
-    WAVHeader header;
-    struct stat statbuf;
-    stat(pcmFile, &statbuf);
-    header.numChannel = numChannle;
-    header.sampleRate = sampRate;
-    header.bitsPerSample = bitPerSample;
-    header.blockAlign = header.bitsPerSample * header.numChannel >> 3;
-    header.byteRate = header.sampleRate * header.blockAlign;
-    header.dataChunkSize = statbuf.st_size;
-    header.riffChunkSize = header.dataChunkSize + sizeof(WAVHeader) - 8;
-
-    FILE *infp = fopen(pcmFile, "rb");
-    FILE *outfp = fopen(wavFile, "wb+");
-
-    fwrite((const char *)&header, sizeof(WAVHeader), 1, outfp);
-
-    char buf[1024];
-    int size;
-
-    while ((size = fread(buf, 1, sizeof(buf), infp)) != 0)
-    {
-        fwrite((const char *)buf, 1, size, outfp);
-        // std::cout << "write buf " << size << "byte" << endl;
-    }
-
-    fclose(infp);
-    fflush(outfp);
-    fclose(outfp);
-    std::cout << "pcmFile to wavFile ok!" << std::endl;
 }
